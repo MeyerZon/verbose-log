@@ -1,0 +1,28 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>verbose-log — browser example</title>
+  </head>
+  <body>
+    <h1>verbose-log browser example</h1>
+    <p>Open devtools. Then set a level and re-run — no refresh needed:</p>
+    <pre>localStorage.VERBOSE = 2; emit();   // everything
+globalThis.VERBOSE = "off"; emit();  // silence (global wins over localStorage)
+delete globalThis.VERBOSE; emit();   // back to localStorage / base</pre>
+
+    <!-- Loaded from a CDN that serves the ESM build. -->
+    <script type="module">
+      import { log } from "https://esm.sh/@meyerzon/verbose-log";
+
+      // Expose a helper so you can re-emit from the console after changing VERBOSE.
+      globalThis.emit = () => {
+        log.info("base — always shown unless silenced");
+        log.v(1).info("level 1 — needs VERBOSE >= 1");
+        log.v(2).debug("level 2 — needs VERBOSE >= 2 (enable 'Verbose' in console)");
+      };
+
+      emit();
+    </script>
+  </body>
+</html>

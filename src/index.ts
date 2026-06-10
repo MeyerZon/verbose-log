@@ -9,44 +9,47 @@
  * "debug", "trace"]` maps name -> rank by order — so calls read `v("debug")`
  * with autocomplete and typo protection. Numbers still work everywhere.
  *
- * Gating model:
- *   - threshold === null  (VERBOSE unset) -> print iff callRank <= 0  // base only
- *   - threshold === n                     -> print iff callRank >= n
- *
- * So `VERBOSE=0` prints every level, `VERBOSE=1` drops level 0, and an unset
- * `VERBOSE` keeps the base (rank 0 / `levels[0]`) calls only.
+ * Gating model (higher `VERBOSE` = MORE output, like `-v` / `-vv` / `-vvv`):
+ *   - print a call at rank `L` iff `L <= threshold`
+ *   - `VERBOSE` unset / `0` -> threshold `0` -> base (rank 0) only
+ *   - `VERBOSE=2`           -> threshold `2` -> ranks 0,1,2  (i.e. `-vv`)
+ *   - `VERBOSE=off`         -> threshold `-1` -> silence everything (even base)
+ *   - `VERBOSE=all`/`true`  -> threshold max -> every level
  *
  * Strict for code, lenient for config: `.v()` throws on an out-of-range or
  * unknown level (developer error), while `VERBOSE` / `level` / `resolve` values
  * are clamped or ignored so external input never crashes the app.
  *
+ * Call sites are preserved: a passing call returns the real (bound) console
+ * method, so browser devtools still point at *your* line, not this library.
+ *
  * Live-toggle caveat: the threshold is re-read on every call. If you change
  * `VERBOSE` at runtime *between* the two halves of a paired console op
  * (`group`/`groupEnd`, `time`/`timeEnd`, `count`/`countReset`), one half may be
- * suppressed and the other not — e.g. an unclosed `group` leaves later output
- * indented. Toggle between logical sections, not inside a pair.
+ * suppressed and the other not — toggle between logical sections, not inside a
+ * pair.
  */
 
-/** A resolved verbosity threshold. `null` means "VERBOSE unset" (base only). */
-export type Threshold = number | null;
+/** A resolved verbosity threshold: print a call at rank `L` iff `L <= threshold`. */
+export type Threshold = number;
 
 export interface VerboseLogOptions<L extends readonly string[] = []> {
   /** Env var name read for the threshold in Node. Default `"VERBOSE"`. */
   envVar?: string;
   /**
-   * Explicit threshold. When set, env / browser lookup is skipped.
-   * `null` = base-only (rank 0), a number = print ranks `>=` it, or a level
-   * name. Out-of-range numbers are clamped; unknown names fall back leniently.
+   * Explicit threshold. When set, env / browser lookup is skipped. A number
+   * (print ranks `<=` it; `-1` silences everything) or a level name. Out-of-range
+   * numbers are clamped.
    */
-  level?: Threshold | (L[number] & string);
+  level?: number | (L[number] & string);
   /** Console implementation to proxy. Default `globalThis.console`. */
   console?: Console;
   /**
    * Custom threshold resolver. Runs before the built-in env / browser lookup.
-   * Return a number, `null` (base-only), or `undefined` to fall through. A
-   * non-finite number (`NaN`/`Infinity`) is also treated as fall-through.
+   * Return a number, or `undefined` to fall through. A non-finite number
+   * (`NaN`/`Infinity`) is also treated as fall-through.
    */
-  resolve?: () => Threshold | undefined;
+  resolve?: () => number | undefined;
   /** Ordered level names, low -> high verbosity. Index = rank. */
   levels?: L;
   /** Max number of ranks when `levels` is not set. Default `3`. */
@@ -67,22 +70,33 @@ export interface VerboseConsole<L extends readonly string[] = []>
 
 interface ResolvedOptions {
   envVar: string;
-  level: Threshold | string | undefined;
-  resolve: (() => Threshold | undefined) | undefined;
+  level: number | string | undefined;
+  resolve: (() => number | undefined) | undefined;
+  /** Original level names, used for error messages. Index = rank. */
+  names: readonly string[];
   /** Level names, pre-lowercased once for cheap lookups. Index = rank. */
   lcLevels: readonly string[];
   max: number;
   /** Memo of the last raw env/global string parsed. */
-  memo: { raw: string; out: Threshold } | null;
+  memo: { raw: string; out: number } | null;
 }
 
 /** Primitive global types accepted as a threshold source. */
 const SCALAR_TYPES = new Set(["string", "number", "boolean"]);
 
-/** Floor `n` and clamp it into the valid `[0, max-1]` window. */
+/** Keywords that silence everything (threshold `-1`). */
+const OFF_WORDS = new Set(["false", "off", "no", "none"]);
+
+/** Keywords that enable every level (threshold `max-1`). */
+const ALL_WORDS = new Set(["true", "on", "yes", "all"]);
+
+/** Shared suppressed call — returned (not allocated) when a call is gated out. */
+const NOOP = (): undefined => undefined;
+
+/** Floor `n` and clamp it into the `[-1, max-1]` window (`-1` = silence all). */
 function clamp(n: number, max: number): number {
   const i = Math.floor(n);
-  if (i < 0) return 0;
+  if (i < -1) return -1;
   if (i > max - 1) return max - 1;
   return i;
 }
@@ -97,20 +111,16 @@ function indexOfLevel(lcLevels: readonly string[], name: string): number {
 }
 
 /** Decide whether a call at `level` passes the active `threshold`. */
-function passes(level: number, threshold: Threshold): boolean {
-  if (threshold === null) return level <= 0;
-  return level >= threshold;
+function passes(level: number, threshold: number): boolean {
+  return level <= threshold;
 }
 
 /**
  * Strict rank resolution for `.v()`. Throws on an out-of-range number or an
  * unknown level name — these are developer mistakes worth surfacing loudly.
  */
-function callRank(
-  value: number | string,
-  lcLevels: readonly string[],
-  max: number,
-): number {
+function callRank(value: number | string, opts: ResolvedOptions): number {
+  const max = opts.max;
   if (typeof value === "number") {
     if (!Number.isInteger(value) || value < 0 || value >= max) {
       throw new RangeError(
@@ -119,9 +129,12 @@ function callRank(
     }
     return value;
   }
-  const idx = indexOfLevel(lcLevels, value);
+  const idx = indexOfLevel(opts.lcLevels, value);
   if (idx < 0) {
-    throw new RangeError(`verbose-log: unknown level "${value}"`);
+    const hint = opts.names.length
+      ? ` (expected one of: ${opts.names.join(", ")})`
+      : "";
+    throw new RangeError(`verbose-log: unknown level "${value}"${hint}`);
   }
   return idx;
 }
@@ -131,41 +144,43 @@ function parseThreshold(
   raw: string,
   lcLevels: readonly string[],
   max: number,
-): Threshold {
+): number {
   const s = raw.trim();
-  if (s === "") return null;
+  if (s === "") return 0; // present but empty -> base only
   // Names win over keywords, so a level literally named "off"/"all" still
   // resolves to its rank.
   const named = indexOfLevel(lcLevels, s);
   if (named >= 0) return named;
   const lc = s.toLowerCase();
-  if (lc === "false" || lc === "off" || lc === "no") return null;
-  if (lc === "true" || lc === "on" || lc === "yes" || lc === "all") return 0;
+  if (OFF_WORDS.has(lc)) return -1;
+  if (ALL_WORDS.has(lc)) return max - 1;
   const n = Number(s);
   if (Number.isFinite(n)) return clamp(n, max); // clamp() floors fractional env
-  // Present but non-numeric, non-name (e.g. "verbose") -> enable all.
-  return 0;
+  // Present but non-numeric, non-name (e.g. "verbose") -> be verbose: enable all.
+  return max - 1;
 }
 
-/** Lenient resolution of the `level` option (number | name | null). */
+/** Lenient resolution of the `level` option (number | name). */
 function resolveLevelOption(
-  value: Threshold | string,
+  value: number | string,
   lcLevels: readonly string[],
   max: number,
-): Threshold {
-  if (value === null) return null;
+): number {
   if (typeof value === "number") {
-    return Number.isFinite(value) ? clamp(value, max) : null;
+    return Number.isFinite(value) ? clamp(value, max) : 0; // NaN -> base only
   }
   return parseThreshold(value, lcLevels, max);
 }
 
-/** Read a threshold from the browser: global var first, then localStorage. */
+/**
+ * Read a threshold from the browser: global var first, then localStorage.
+ * Returns `undefined` when neither source is present.
+ */
 function readBrowserThreshold(
   key: string,
   lcLevels: readonly string[],
   max: number,
-): Threshold {
+): number | undefined {
   const g = globalThis as Record<string, unknown>;
   if (key in g) {
     const raw = g[key];
@@ -185,11 +200,11 @@ function readBrowserThreshold(
   } catch {
     // localStorage access can throw (privacy mode, sandboxed iframe).
   }
-  return null;
+  return undefined;
 }
 
 /** Parse an env string, memoizing the last raw value for the hot path. */
-function parseEnvMemo(opts: ResolvedOptions, raw: string): Threshold {
+function parseEnvMemo(opts: ResolvedOptions, raw: string): number {
   const m = opts.memo;
   if (m && m.raw === raw) return m.out;
   const out = parseThreshold(raw, opts.lcLevels, opts.max);
@@ -198,13 +213,12 @@ function parseEnvMemo(opts: ResolvedOptions, raw: string): Threshold {
 }
 
 /** Resolve the active threshold for a logger, fresh on every call. */
-function readThreshold(opts: ResolvedOptions): Threshold {
+function readThreshold(opts: ResolvedOptions): number {
   if (opts.level !== undefined) {
     return resolveLevelOption(opts.level, opts.lcLevels, opts.max);
   }
   if (opts.resolve) {
     const r = opts.resolve();
-    if (r === null) return null;
     if (typeof r === "number" && Number.isFinite(r)) return clamp(r, opts.max);
     // `undefined` or a non-finite number -> fall through to env / browser.
   }
@@ -217,7 +231,8 @@ function readThreshold(opts: ResolvedOptions): Threshold {
     // documented browser sources — only return when the var is actually set.
     if (raw != null) return parseEnvMemo(opts, raw);
   }
-  return readBrowserThreshold(opts.envVar, opts.lcLevels, opts.max);
+  // Nothing set anywhere -> base only (rank 0).
+  return readBrowserThreshold(opts.envVar, opts.lcLevels, opts.max) ?? 0;
 }
 
 /** Build a gated proxy around `target` for a fixed call `level` (rank). */
@@ -226,29 +241,32 @@ function makeProxy<L extends readonly string[]>(
   level: number,
   opts: ResolvedOptions,
 ): VerboseConsole<L> {
-  // Cache wrappers per property so method identity is stable
-  // (`logger.log === logger.log`) and hot paths don't allocate per access.
+  // Cache the `.v` factory and per-method bound functions. Bound methods keep
+  // a stable identity AND preserve the caller's devtools call site.
   const cache = new Map<PropertyKey, unknown>();
   return new Proxy(target, {
     get(t, prop, receiver) {
-      if (cache.has(prop)) return cache.get(prop);
       if (prop === "v") {
-        const vfn = (lvl: number | string): VerboseConsole<L> =>
-          makeProxy<L>(t, callRank(lvl, opts.lcLevels, opts.max), opts);
-        cache.set(prop, vfn);
+        let vfn = cache.get(prop);
+        if (vfn === undefined) {
+          vfn = (lvl: number | string): VerboseConsole<L> =>
+            makeProxy<L>(t, callRank(lvl, opts), opts);
+          cache.set(prop, vfn);
+        }
         return vfn;
       }
       const value = Reflect.get(t, prop, receiver) as unknown;
-      // Non-function members are returned live (never cached) so data
-      // properties stay in sync with the underlying console.
+      // Non-function members are returned live so data properties stay in sync.
       if (typeof value !== "function") return value;
-      const fn = value as (...a: unknown[]) => unknown;
-      const wrapper = (...args: unknown[]): unknown => {
-        if (passes(level, readThreshold(opts))) return fn.apply(t, args);
-        return undefined;
-      };
-      cache.set(prop, wrapper);
-      return wrapper;
+      // Gate at access time. Suppressed -> shared no-op; passing -> the REAL
+      // method, bound, so devtools blames the caller's line, not this file.
+      if (!passes(level, readThreshold(opts))) return NOOP;
+      let bound = cache.get(prop);
+      if (bound === undefined) {
+        bound = (value as (...a: unknown[]) => unknown).bind(t);
+        cache.set(prop, bound);
+      }
+      return bound;
     },
   }) as unknown as VerboseConsole<L>;
 }
@@ -264,6 +282,7 @@ export function createLogger<const L extends readonly string[] = []>(
     envVar: options.envVar ?? "VERBOSE",
     level: options.level,
     resolve: options.resolve,
+    names: levels,
     lcLevels: levels.map((s) => s.toLowerCase()),
     max,
     memo: null,

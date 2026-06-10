@@ -26,8 +26,8 @@ afterEach(() => {
   else process.env.VERBOSE = ORIG;
 });
 
-describe("VERBOSE env threshold (numeric)", () => {
-  it("unset -> only level 0 prints", () => {
+describe("VERBOSE env threshold (numeric, higher = more)", () => {
+  it("unset -> base only (rank 0)", () => {
     delete process.env.VERBOSE;
     const { c, first } = capture();
     const v = createLogger({ console: c });
@@ -37,8 +37,27 @@ describe("VERBOSE env threshold (numeric)", () => {
     expect(first()).toEqual(["a"]);
   });
 
-  it("VERBOSE=0 -> all levels print", () => {
+  it("VERBOSE=0 -> base only", () => {
     process.env.VERBOSE = "0";
+    const { c, first } = capture();
+    const v = createLogger({ console: c });
+    v.info("a");
+    v.v(1).info("b");
+    expect(first()).toEqual(["a"]);
+  });
+
+  it("VERBOSE=1 -> ranks 0 and 1", () => {
+    process.env.VERBOSE = "1";
+    const { c, first } = capture();
+    const v = createLogger({ console: c });
+    v.info("a");
+    v.v(1).info("b");
+    v.v(2).warn("c");
+    expect(first()).toEqual(["a", "b"]);
+  });
+
+  it("VERBOSE=2 -> every rank", () => {
+    process.env.VERBOSE = "2";
     const { c, first } = capture();
     const v = createLogger({ console: c });
     v.info("a");
@@ -47,89 +66,81 @@ describe("VERBOSE env threshold (numeric)", () => {
     expect(first()).toEqual(["a", "b", "c"]);
   });
 
-  it("VERBOSE=1 -> drops level 0", () => {
-    process.env.VERBOSE = "1";
-    const { c, first } = capture();
-    const v = createLogger({ console: c });
-    v.info("a");
-    v.v(1).info("b");
-    v.v(2).warn("c");
-    expect(first()).toEqual(["b", "c"]);
-  });
-
-  it("negative threshold clamps to 0 (prints all)", () => {
+  it("VERBOSE=-1 -> silence everything (even base)", () => {
     process.env.VERBOSE = "-1";
     const { c, first } = capture();
     const v = createLogger({ console: c });
     v.info("a");
     v.v(1).info("b");
-    expect(first()).toEqual(["a", "b"]);
+    expect(first()).toEqual([]);
   });
 });
 
 describe("parseThreshold", () => {
-  function only0For(value: string) {
+  // threshold for these helpers is whatever VERBOSE resolves to; we probe with
+  // a base (rank 0) call and a deeper (rank 2) call.
+  function probe(value: string) {
     process.env.VERBOSE = value;
     const { c, first } = capture();
     const v = createLogger({ console: c });
-    v.info("base");
-    v.v(1).info("hi");
-    return first();
-  }
-  function allFor(value: string) {
-    process.env.VERBOSE = value;
-    const { c, first } = capture();
-    const v = createLogger({ console: c });
-    v.info("base");
-    v.v(2).debug("deep");
+    v.info("base"); // rank 0
+    v.v(2).debug("deep"); // rank 2
     return first();
   }
 
   it("empty string -> base only", () => {
-    expect(only0For("")).toEqual(["base"]);
+    expect(probe("")).toEqual(["base"]);
   });
 
   it("whitespace -> base only", () => {
-    expect(only0For("   ")).toEqual(["base"]);
+    expect(probe("   ")).toEqual(["base"]);
   });
 
-  it.each(["false", "off", "no", "OFF", "No"])("%s -> base only", (val) => {
-    expect(only0For(val)).toEqual(["base"]);
-  });
-
-  it.each(["true", "on", "yes", "all", "ALL", "Yes"])(
-    "%s -> enable all",
+  it.each(["false", "off", "no", "none", "OFF"])(
+    "%s -> silence all",
     (val) => {
-      expect(allFor(val)).toEqual(["base", "deep"]);
+      expect(probe(val)).toEqual([]);
     },
   );
 
-  it("non-numeric junk -> enable all", () => {
-    expect(allFor("verbose")).toEqual(["base", "deep"]);
+  it.each(["true", "on", "yes", "all", "ALL"])("%s -> enable all", (val) => {
+    expect(probe(val)).toEqual(["base", "deep"]);
   });
 
-  it("numeric string trims whitespace", () => {
-    process.env.VERBOSE = "  2  ";
+  it("non-numeric junk -> enable all", () => {
+    expect(probe("verbose")).toEqual(["base", "deep"]);
+  });
+
+  it("fractional VERBOSE is floored", () => {
+    process.env.VERBOSE = "1.5"; // floor -> 1
     const { c, first } = capture();
     const v = createLogger({ console: c });
-    v.v(1).info("drop");
-    v.v(2).info("keep");
+    v.v(1).log("keep"); // 1 <= 1
+    v.v(2).log("drop"); // 2 <= 1 false
     expect(first()).toEqual(["keep"]);
+  });
+
+  it("very negative numeric clamps to -1 (silence)", () => {
+    expect(probe("-5")).toEqual([]);
+  });
+
+  it("over-range numeric clamps to max-1 (enable all)", () => {
+    expect(probe("9")).toEqual(["base", "deep"]);
   });
 });
 
 describe("named levels", () => {
   const LEVELS = ["info", "debug", "trace"] as const;
 
-  it("gates by rank, plain call is base (rank 0)", () => {
-    process.env.VERBOSE = "debug";
+  it("threshold is the named rank; prints that rank and below", () => {
+    process.env.VERBOSE = "debug"; // rank 1 -> print ranks 0,1
     const { c, first } = capture();
     const v = createLogger({ console: c, levels: LEVELS });
-    v.log("base"); // rank 0 -> drop
-    v.v("info").log("i"); // rank 0 -> drop
+    v.log("base"); // rank 0 -> keep
+    v.v("info").log("i"); // rank 0 -> keep
     v.v("debug").log("d"); // rank 1 -> keep
-    v.v("trace").log("t"); // rank 2 -> keep
-    expect(first()).toEqual(["d", "t"]);
+    v.v("trace").log("t"); // rank 2 -> drop
+    expect(first()).toEqual(["base", "i", "d"]);
   });
 
   it("names and numbers are equivalent", () => {
@@ -138,35 +149,37 @@ describe("named levels", () => {
     const v = createLogger({ console: c, levels: LEVELS });
     v.v("debug").log("a"); // rank 1 -> keep
     v.v(1).log("b"); // rank 1 -> keep
-    v.v("info").log("c"); // rank 0 -> drop
-    v.v(0).log("d"); // rank 0 -> drop
+    v.v("trace").log("c"); // rank 2 -> drop
+    v.v(2).log("d"); // rank 2 -> drop
     expect(first()).toEqual(["a", "b"]);
   });
 
   it("VERBOSE accepts a level name (case-insensitive)", () => {
-    process.env.VERBOSE = "TRACE";
+    process.env.VERBOSE = "DEBUG"; // rank 1
     const { c, first } = capture();
     const v = createLogger({ console: c, levels: LEVELS });
-    v.v("debug").log("d"); // rank 1 -> drop
-    v.v("trace").log("t"); // rank 2 -> keep
-    expect(first()).toEqual(["t"]);
+    v.v("debug").log("d"); // rank 1 -> keep
+    v.v("trace").log("t"); // rank 2 -> drop
+    expect(first()).toEqual(["d"]);
   });
 
   it("a level name wins over a keyword of the same text", () => {
     process.env.VERBOSE = "all"; // matches level "all" (rank 1), not enable-all
     const { c, first } = capture();
     const v = createLogger({ console: c, levels: ["quiet", "all", "loud"] });
-    v.v("quiet").log("q"); // rank 0 -> drop
+    v.v("quiet").log("q"); // rank 0 -> keep
     v.v("all").log("a"); // rank 1 -> keep
-    expect(first()).toEqual(["a"]);
+    v.v("loud").log("l"); // rank 2 -> drop (proves threshold is 1, not max)
+    expect(first()).toEqual(["q", "a"]);
   });
 
   it("level option accepts a name", () => {
     const { c, first } = capture();
     const v = createLogger({ console: c, levels: LEVELS, level: "debug" });
-    v.v("info").log("i"); // rank 0 -> drop
+    v.v("info").log("i"); // rank 0 -> keep
     v.v("debug").log("d"); // rank 1 -> keep
-    expect(first()).toEqual(["d"]);
+    v.v("trace").log("t"); // rank 2 -> drop
+    expect(first()).toEqual(["i", "d"]);
   });
 
   it("rejects unknown level names at compile time", () => {
@@ -182,42 +195,47 @@ describe("level cap", () => {
   it("throws on out-of-range / non-integer numeric level (strict)", () => {
     const { c } = capture();
     const v = createLogger({ console: c }); // default max 3 -> ranks 0..2
-    expect(() => v.v(3)).toThrow(RangeError);
+    expect(() => v.v(3)).toThrow(/out of range \[0, 2\]/);
     expect(() => v.v(-1)).toThrow(RangeError);
     expect(() => v.v(1.5)).toThrow(RangeError);
     expect(() => v.v(2)).not.toThrow();
   });
 
-  it("throws on unknown name for a named logger (strict)", () => {
+  it("unknown name error lists the valid names", () => {
     const { c } = capture();
-    const v = createLogger({ console: c, levels: ["a", "b"] });
-    expect(() => (v as unknown as { v(x: string): unknown }).v("nope")).toThrow(
-      RangeError,
-    );
+    const v = createLogger({ console: c, levels: ["info", "debug"] });
+    expect(() =>
+      (v as unknown as { v(x: string): unknown }).v("nope"),
+    ).toThrow(/expected one of: info, debug/);
   });
 
-  it("clamps an over-range VERBOSE threshold (lenient)", () => {
-    process.env.VERBOSE = "9"; // clamps to 2
-    const { c, first } = capture();
+  it("unknown name on an unnamed logger throws without a hint", () => {
+    const { c } = capture();
     const v = createLogger({ console: c });
-    v.v(2).log("x"); // 2 >= 2 -> keep
-    v.v(1).log("y"); // 1 >= 2 -> drop
-    expect(first()).toEqual(["x"]);
+    expect(() =>
+      (v as unknown as { v(x: string): unknown }).v("nope"),
+    ).toThrow(/unknown level "nope"$/);
   });
 
   it("clamps an over-range level option (lenient)", () => {
     const { c, first } = capture();
-    const v = createLogger({ console: c, level: 9 }); // clamps to 2
+    const v = createLogger({ console: c, level: 9 }); // clamps to 2 (all)
     v.v(2).log("x");
-    v.v(1).log("y");
     expect(first()).toEqual(["x"]);
   });
 
+  it("level: -1 silences everything", () => {
+    const { c, first } = capture();
+    const v = createLogger({ console: c, level: -1 });
+    v.log("base");
+    v.v(1).log("hi");
+    expect(first()).toEqual([]);
+  });
+
   it("maxLevels widens the valid range", () => {
-    const { c, lines } = capture();
+    const { c } = capture();
     const v = createLogger({ console: c, maxLevels: 5, level: 0 });
-    v.v(4).log("x"); // valid (max 5)
-    expect(lines).toHaveLength(1);
+    expect(() => v.v(4)).not.toThrow(); // valid (max 5)
     expect(() => v.v(5)).toThrow(RangeError);
   });
 
@@ -231,19 +249,12 @@ describe("level cap", () => {
 
 describe("options", () => {
   it("explicit level overrides env", () => {
-    process.env.VERBOSE = "2";
-    const { c, lines } = capture();
-    const v = createLogger({ console: c, level: 0 });
-    v.v(2).log("x");
-    expect(lines).toHaveLength(1);
-  });
-
-  it("level: null -> base only", () => {
+    process.env.VERBOSE = "2"; // would enable all
     const { c, first } = capture();
-    const v = createLogger({ console: c, level: null });
-    v.log("base");
-    v.v(1).log("hi");
-    expect(first()).toEqual(["base"]);
+    const v = createLogger({ console: c, level: 0 }); // base only
+    v.v(1).log("x");
+    v.log("y");
+    expect(first()).toEqual(["y"]);
   });
 
   it("custom envVar", () => {
@@ -252,60 +263,54 @@ describe("options", () => {
     const v = createLogger({ console: c, envVar: "MY_V" });
     v.info("a");
     v.v(1).info("b");
+    v.v(2).info("c");
     delete process.env.MY_V;
-    expect(first()).toEqual(["b"]);
+    expect(first()).toEqual(["a", "b"]);
   });
 
   it("resolve() takes precedence over env", () => {
     process.env.VERBOSE = "2";
-    const { c, lines } = capture();
-    const v = createLogger({ console: c, resolve: () => 0 });
-    v.v(2).log("x");
-    expect(lines).toHaveLength(1);
+    const { c, first } = capture();
+    const v = createLogger({ console: c, resolve: () => 0 }); // base only
+    v.v(1).log("x");
+    v.log("y");
+    expect(first()).toEqual(["y"]);
+  });
+
+  it("resolve() finite number is used", () => {
+    delete process.env.VERBOSE;
+    const { c, first } = capture();
+    const v = createLogger({ console: c, resolve: () => 1 });
+    v.v(1).log("a");
+    v.v(2).log("b");
+    expect(first()).toEqual(["a"]);
   });
 
   it("resolve() returning undefined falls through to env", () => {
     process.env.VERBOSE = "1";
     const { c, first } = capture();
     const v = createLogger({ console: c, resolve: () => undefined });
-    v.info("a");
     v.v(1).info("b");
+    v.v(2).info("c");
     expect(first()).toEqual(["b"]);
   });
 
-  it("resolve() may return null (base only)", () => {
-    process.env.VERBOSE = "0";
+  it("resolve() returning NaN falls through to env", () => {
+    process.env.VERBOSE = "2";
     const { c, first } = capture();
-    const v = createLogger({ console: c, resolve: () => null });
-    v.info("a");
-    v.v(1).info("b");
-    expect(first()).toEqual(["a"]);
-  });
-
-  it("resolve() over-range number is clamped", () => {
-    const { c, first } = capture();
-    const v = createLogger({ console: c, resolve: () => 9 }); // clamp to 2
-    v.v(2).log("x");
-    v.v(1).log("y");
-    expect(first()).toEqual(["x"]);
-  });
-
-  it("resolve() returning NaN falls through to env (does not mute)", () => {
-    process.env.VERBOSE = "0";
-    const { c, first } = capture();
-    const v = createLogger({ console: c, resolve: () => Number("nope") }); // NaN
+    const v = createLogger({ console: c, resolve: () => Number("x") }); // NaN
     v.info("a");
     v.v(2).debug("b");
-    expect(first()).toEqual(["a", "b"]); // env VERBOSE=0 wins, nothing muted
+    expect(first()).toEqual(["a", "b"]);
   });
 
   it("resolve() returning Infinity falls through to env", () => {
-    process.env.VERBOSE = "1";
+    process.env.VERBOSE = "0";
     const { c, first } = capture();
     const v = createLogger({ console: c, resolve: () => Infinity });
     v.info("a");
     v.v(1).info("b");
-    expect(first()).toEqual(["b"]);
+    expect(first()).toEqual(["a"]);
   });
 
   it("level: NaN -> base only (lenient)", () => {
@@ -314,15 +319,6 @@ describe("options", () => {
     v.log("base");
     v.v(1).log("hi");
     expect(first()).toEqual(["base"]);
-  });
-
-  it("fractional VERBOSE is floored (strict/lenient agree on rank 1)", () => {
-    process.env.VERBOSE = "1.5"; // floor -> 1
-    const { c, first } = capture();
-    const v = createLogger({ console: c });
-    v.v(1).log("keep"); // 1 >= 1
-    v.v(0).log("drop"); // 0 >= 1 false
-    expect(first()).toEqual(["keep"]);
   });
 
   it("threshold is read fresh on each call", () => {
@@ -337,8 +333,7 @@ describe("options", () => {
 });
 
 describe("browser threshold (no process.env)", () => {
-  // Mask only process.env (keep nextTick/exit so the vitest worker survives)
-  // so the browser resolution path runs.
+  // Mask only process.env (keep nextTick/exit so the vitest worker survives).
   function browser(setup: (g: Record<string, unknown>) => void) {
     const real = process;
     vi.stubGlobal(
@@ -347,8 +342,7 @@ describe("browser threshold (no process.env)", () => {
         get: (t, p) => (p === "env" ? undefined : Reflect.get(t, p, t)),
       }),
     );
-    const g = globalThis as unknown as Record<string, unknown>;
-    setup(g);
+    setup(globalThis as unknown as Record<string, unknown>);
   }
 
   it("reads global var", () => {
@@ -359,12 +353,13 @@ describe("browser threshold (no process.env)", () => {
     const v = createLogger({ console: c });
     v.info("a");
     v.v(1).info("b");
+    v.v(2).info("c");
     delete (globalThis as Record<string, unknown>).VERBOSE;
-    expect(first()).toEqual(["b"]);
+    expect(first()).toEqual(["a", "b"]);
   });
 
   it("falls back to localStorage", () => {
-    const store = new Map<string, string>([["VERBOSE", "0"]]);
+    const store = new Map<string, string>([["VERBOSE", "2"]]);
     browser((g) => {
       delete g.VERBOSE;
       g.localStorage = {
@@ -421,9 +416,9 @@ describe("browser threshold (no process.env)", () => {
     expect(first()).toEqual(["a"]);
   });
 
-  it("non-primitive global VERBOSE is ignored (no enable-all)", () => {
+  it("non-primitive global VERBOSE is ignored", () => {
     browser((g) => {
-      g.VERBOSE = { nope: true }; // object collision from another script
+      g.VERBOSE = { nope: true };
       delete g.localStorage;
     });
     const { c, first } = capture();
@@ -431,11 +426,10 @@ describe("browser threshold (no process.env)", () => {
     v.info("a");
     v.v(1).info("b");
     delete (globalThis as Record<string, unknown>).VERBOSE;
-    expect(first()).toEqual(["a"]); // ignored -> null -> base only
+    expect(first()).toEqual(["a"]); // ignored -> base only
   });
 
   it("a bundler-polyfilled process.env does not shadow global VERBOSE", () => {
-    // Real env object present, but the var itself is unset.
     vi.stubGlobal(
       "process",
       new Proxy(process, {
@@ -447,14 +441,15 @@ describe("browser threshold (no process.env)", () => {
     const v = createLogger({ console: c });
     v.info("a");
     v.v(1).info("b");
+    v.v(2).info("c");
     delete (globalThis as Record<string, unknown>).VERBOSE;
-    expect(first()).toEqual(["b"]); // falls through to the global
+    expect(first()).toEqual(["a", "b"]);
   });
 });
 
 describe("proxy behavior", () => {
   it("forwards arbitrary console methods and args", () => {
-    process.env.VERBOSE = "0";
+    process.env.VERBOSE = "2";
     const { c, lines } = capture();
     const v = createLogger({ console: c });
     v.group("g");
@@ -469,20 +464,21 @@ describe("proxy behavior", () => {
       data: 123,
       log: (..._a: unknown[]) => undefined,
     } as unknown as Console;
-    const v = createLogger({ console: target, level: null });
+    const v = createLogger({ console: target, level: 0 });
     expect((v as unknown as { data: number }).data).toBe(123);
   });
 
   it("nested .v() rescopes (last wins)", () => {
-    process.env.VERBOSE = "2";
+    process.env.VERBOSE = "1";
     const { c, first } = capture();
     const v = createLogger({ console: c });
-    v.v(1).v(2).log("kept"); // final rank 2 >= 2
-    v.v(2).v(0).log("dropped"); // final rank 0 < 2
+    v.v(2).v(1).log("kept"); // final rank 1 <= 1
+    v.v(0).v(2).log("dropped"); // final rank 2 <= 1 false
     expect(first()).toEqual(["kept"]);
   });
 
-  it("method identity is stable across accesses (wrappers cached)", () => {
+  it("method identity is stable across accesses while passing", () => {
+    delete process.env.VERBOSE; // threshold 0, rank-0 methods pass
     const { c } = capture();
     const v = createLogger({ console: c });
     expect(v.log).toBe(v.log);
@@ -490,28 +486,28 @@ describe("proxy behavior", () => {
     expect(v.v).toBe(v.v);
   });
 
-  it("muted call returns undefined; live call returns underlying value", () => {
+  it("passing call returns the underlying value; muted returns undefined", () => {
     const target = {
       log: (...args: unknown[]) => args[0],
     } as unknown as Console;
     const v = createLogger({ console: target, level: 1 });
-    expect(v.v(0).log("muted")).toBeUndefined();
-    expect(v.v(1).log("live")).toBe("live");
+    expect(v.v(1).log("live")).toBe("live"); // 1 <= 1 -> real method
+    expect(v.v(2).log("muted")).toBeUndefined(); // 2 <= 1 false -> no-op
   });
 });
 
 describe("log export (default logger)", () => {
   it("log is a usable VerboseConsole bound to real console", () => {
-    process.env.VERBOSE = "0";
+    process.env.VERBOSE = "2";
     const spy = vi.spyOn(console, "log").mockImplementation(() => undefined);
     log.v(2).log("hello");
     expect(spy).toHaveBeenCalledWith("hello");
   });
 
-  it("default logger mutes high levels when VERBOSE unset", () => {
+  it("default logger mutes deeper levels when VERBOSE unset", () => {
     delete process.env.VERBOSE;
     const spy = vi.spyOn(console, "log").mockImplementation(() => undefined);
-    log.v(2).log("nope");
+    log.v(1).log("nope");
     log.log("base");
     expect(spy).toHaveBeenCalledTimes(1);
     expect(spy).toHaveBeenCalledWith("base");

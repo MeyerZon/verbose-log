@@ -29,22 +29,25 @@ Everything lives in `src/index.ts` (one file, no internal modules). Public expor
 
 The mechanism is a `Proxy` (`makeProxy`) wrapping a `Console`. Each proxy carries a fixed call `level` (rank). On property access:
 - `.v(level)` returns a **new** proxy at the requested rank — this is how `log.v(2).info(...)` scopes one call. The base proxy is rank `0`.
-- any other prop returns the underlying console member; if it's a function, it's wrapped so it only calls through when `passes(level, readThreshold(opts))` is true.
+- any other prop returns the underlying console member; functions are gated **at access time** — when `passes(level, readThreshold(opts))` holds the trap returns the **real, bound** method (so browser devtools blame the caller's line, not this file), otherwise a shared `NOOP`. Bound methods are cached per prop for stable identity.
 
-The threshold is read **fresh on every call** (`readThreshold`), so changing `VERBOSE` / the global at runtime takes effect immediately — don't cache it.
+The threshold is read **fresh on every access** (`readThreshold`), so changing `VERBOSE` / the global at runtime takes effect immediately — don't cache it.
 
 ### The gating model (core invariant)
 
-`Threshold` is `number | null`. `null` means "VERBOSE unset". A call at rank `L` prints when:
-- `threshold === null` → `L <= 0` (base/rank-0 only)
-- `threshold === n` → `L >= n`
+`Threshold` is `number`. A call at rank `L` prints when `L <= threshold` — **higher `VERBOSE` = MORE output** (the `-v` / `-vv` / `-vvv` model). Resolution maps:
+- unset / `0` → `0` (base/rank-0 only)
+- `n` → `n` (ranks `0..n`)
+- `off`/`false`/`no`/`none` → `-1` (silence everything, even base)
+- `true`/`on`/`yes`/`all` → `max-1` (every level)
+- unknown truthy junk → `max-1`
 
-So **higher `VERBOSE` = stricter = fewer messages**. `VERBOSE=0` prints everything; unset prints base only. This is the central, counterintuitive rule — preserve it in `passes()` and any docs.
+This is the central rule — preserve it in `passes()` and any docs.
 
 ### Strict vs lenient (deliberate split)
 
 - **Strict** — `callRank()` backs `.v()`. Out-of-range numbers, non-integers, and unknown level names throw `RangeError`. `.v()` reflects *your* code; mistakes surface loudly.
-- **Lenient** — `parseThreshold()` / `resolveLevelOption()` back `VERBOSE`, the `level` option, and `resolve()`. Numbers clamp into `[0, max-1]`; unrecognized values fall back gracefully. External input must never crash the app.
+- **Lenient** — `parseThreshold()` / `resolveLevelOption()` back `VERBOSE`, the `level` option, and `resolve()`. Numbers clamp into `[-1, max-1]` (`-1` silences all); a non-finite `resolve()`/`level` falls through / defaults to base; unrecognized values fall back gracefully. External input must never crash the app.
 
 Keep this asymmetry when editing. Don't make config parsing throw; don't make `.v()` clamp.
 
@@ -58,6 +61,8 @@ Ranks are `0..max-1`. `max` = `levels.length` when `levels` is given, else `maxL
 2. custom `resolve()` (if it returns non-`undefined`)
 3. Node: `process.env[envVar]` (default `VERBOSE`)
 4. Browser fallback (`readBrowserThreshold`): `globalThis[VERBOSE]` first, then `localStorage.getItem("VERBOSE")`. `localStorage` access is wrapped in try/catch (privacy mode / sandboxed iframe can throw).
+
+Refinements: the env var only short-circuits when **actually set** (a bundler-polyfilled `process.env` without the var falls through to the browser sources); a non-primitive global (`SCALAR_TYPES` check) is ignored, not coerced; the last raw env string is memoized (`parseEnvMemo`).
 
 `process` is feature-detected off `globalThis`, never assumed — that's what keeps the same build working in the browser.
 

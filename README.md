@@ -5,10 +5,22 @@
 # @meyerzon/verbose-log
 
 [![CI](https://github.com/MeyerZon/verbose-log/actions/workflows/ci.yml/badge.svg)](https://github.com/MeyerZon/verbose-log/actions/workflows/ci.yml)
+[![npm](https://img.shields.io/npm/v/@meyerzon/verbose-log.svg)](https://www.npmjs.com/package/@meyerzon/verbose-log)
+[![types](https://img.shields.io/npm/types/@meyerzon/verbose-log.svg)](https://www.npmjs.com/package/@meyerzon/verbose-log)
+![zero dependencies](https://img.shields.io/badge/dependencies-0-brightgreen.svg)
+![coverage](https://img.shields.io/badge/coverage-100%25-brightgreen.svg)
 
 A `console` proxy gated by a `VERBOSE` threshold. Use it exactly like the
 built-in `console`, but attach a verbosity level to any call and let the
-environment decide what actually prints. Works in Node and the browser.
+environment decide what actually prints.
+
+- **Zero dependencies**, dual **ESM + CJS** with full `.d.ts` types.
+- **Node ≥ 20 and browsers.**
+- **Higher `VERBOSE` = more output**, just like `-v` / `-vv` / `-vvv`.
+- **Live**: change `VERBOSE` (or `localStorage`) at runtime, next call obeys —
+  no restart, no page refresh.
+- **Devtools-friendly**: passing calls keep your original file/line.
+- **Typed named levels** with autocomplete and typo protection.
 
 ## Install
 
@@ -21,14 +33,14 @@ npm install @meyerzon/verbose-log
 ```ts
 import { log } from "@meyerzon/verbose-log";
 
-log.info("always-ish (level 0)");
-log.v(1).info("shown when VERBOSE >= ... see rules below");
-log.v(2).warn("deeper detail");
+log.info("always shown");          // rank 0 (base)
+log.v(1).info("shown at VERBOSE>=1");
+log.v(2).warn("shown at VERBOSE>=2");
 
-// Full console surface is proxied:
+// The full console surface is proxied:
 log.v(1).table([{ a: 1 }]);
 log.group("scope");
-log.v(2).debug("trace-ish");
+log.v(2).debug("deep detail");
 log.groupEnd();
 ```
 
@@ -36,32 +48,32 @@ log.groupEnd();
 
 ## Gating rules
 
-`VERBOSE` is a **threshold**. A call at level `L` prints when:
+`VERBOSE` is a **threshold**: a call at rank `L` prints when `L <= VERBOSE`.
+Higher `VERBOSE` = **more** output (the `-v` / `-vv` mental model). Levels are
+ranks `0..max-1` (`max` defaults to **3**, so ranks `0`, `1`, `2`).
 
-| `VERBOSE`     | Effective rule        | Prints                       |
-| ------------- | --------------------- | ---------------------------- |
-| _unset_       | `L <= 0`              | base (level 0) only          |
-| `0`           | `L >= 0`              | every level                  |
-| `1`           | `L >= 1`              | level 1 and above (0 muted)  |
-| `n`           | `L >= n`              | level `n` and above          |
-| `true`/`all`  | `L >= 0`              | every level                  |
-| `false`/`off` | `L <= 0`              | base only                    |
-
-Higher `VERBOSE` = stricter = fewer messages. Levels are ranks `0..max-1`
-(`max` defaults to **3**, so ranks `0`, `1`, `2`).
+| `VERBOSE`      | Prints                                  | Like   |
+| -------------- | --------------------------------------- | ------ |
+| _unset_ or `0` | base (rank 0) only                      |        |
+| `1`            | ranks 0–1                               | `-v`   |
+| `2`            | ranks 0–2 (everything, at default max)  | `-vv`  |
+| `n`            | ranks `0..n`                            |        |
+| `true` / `all` | every level                             |        |
+| `off` / `false`| nothing — silences even the base        |        |
 
 ```sh
-VERBOSE=0 node app.js   # everything
-VERBOSE=2 node app.js   # only level >= 2
 node app.js             # base only
+VERBOSE=1 node app.js   # base + level 1
+VERBOSE=2 node app.js   # everything (default max)
+VERBOSE=off node app.js # silence completely
 ```
 
 ## Named levels
 
 Give levels names instead of bare numbers. They are an **ordered** list (low ->
-high verbosity); the index is the rank, and `levels[0]` is the always-on base.
-Names are fully typed — autocomplete at call sites, typos rejected by the
-compiler. `VERBOSE` accepts a name or a number.
+high verbosity); the index is the rank, and `levels[0]` is the base. Names are
+fully typed — autocomplete at call sites, typos rejected by the compiler.
+`VERBOSE` accepts a name or a number.
 
 ```ts
 import { createLogger } from "@meyerzon/verbose-log";
@@ -79,48 +91,78 @@ log.v("trcae").info("typo caught at compile time");
 ```
 
 ```sh
-VERBOSE=debug node app.js   # debug + trace
-VERBOSE=trace node app.js   # trace only
+VERBOSE=info  node app.js   # base only
+VERBOSE=debug node app.js   # info + debug
+VERBOSE=trace node app.js   # everything
 VERBOSE=1     node app.js   # same as VERBOSE=debug
 ```
 
 ### Why this is useful
 
 - **Readable call sites** — `v("trace")` says what `v(2)` cannot.
-- **Typo protection** — an unknown level name fails `tsc`; at runtime `.v()`
-  throws a `RangeError` (developer errors are loud).
+- **Typo protection** — an unknown level fails `tsc`; at runtime `.v()` throws a
+  `RangeError` that lists the valid names.
 - **CLI `-v` / `-vv` / `-vvv`** — count the flags and feed the rank in:
 
   ```ts
-  const verbosity = (argv.match(/-v/g) ?? []).length; // 0..n
+  const verbosity = (process.argv.join(" ").match(/-v/g) ?? []).length;
   const log = createLogger({ maxLevels: 3, level: Math.min(verbosity, 2) });
   ```
 
-- **Bounded granularity for library authors** — `maxLevels` (or a fixed
-  `levels` list) caps how verbose consumers can get, keeping your library's
-  `VERBOSE` vocabulary small and stable.
+- **Per-module namespaces** — there is no `debug`-style namespace selector, but a
+  distinct env var per module gives the same selective control:
+
+  ```ts
+  const log = createLogger({ envVar: "VERBOSE_DB" }); // VERBOSE_DB=2 node app.js
+  ```
+
+- **Bounded granularity for library authors** — `maxLevels` (or a fixed `levels`
+  list) caps how verbose consumers can get, keeping the `VERBOSE` vocabulary
+  small and stable.
 
 ### Strict vs lenient
 
 - **`.v()` is strict** — an out-of-range number, a non-integer, or an unknown
   name throws `RangeError`. This is your code; mistakes should surface.
 - **`VERBOSE` / `level` / `resolve` are lenient** — out-of-range numbers are
-  clamped into `[0, max-1]` and unrecognized values fall back gracefully.
+  clamped into `[-1, max-1]` and unrecognized values fall back gracefully.
   External input must never crash the app.
 
 ## Browser
 
-There is no `process.env` in the browser, so the threshold is resolved from,
-in order:
+There is no `process.env` in the browser, so the threshold is resolved from, in
+order:
 
 1. a global variable — `globalThis.VERBOSE`
 2. `localStorage.getItem("VERBOSE")`
 
 ```js
 globalThis.VERBOSE = 1;
-// or
-localStorage.setItem("VERBOSE", "1");
+// or, persisted across reloads:
+localStorage.setItem("VERBOSE", "2");
 ```
+
+Both honor a custom `envVar`, so `createLogger({ envVar: "DEBUG_X" })` reads
+`globalThis.DEBUG_X` / `localStorage.DEBUG_X`. Unlike `debug`, a change takes
+effect on the **next call** — no page refresh.
+
+> **Chrome/Edge gotcha:** `console.debug` output is hidden unless the devtools
+> console **Verbose** log level is enabled. If `log.v(n).debug(...)` passes the
+> threshold but you see nothing, check that filter — it's a devtools default,
+> not this library.
+
+## Stripping logs in production
+
+`log.*` calls are ordinary function calls with side effects, so bundlers cannot
+tree-shake them away. To drop them from a production build, use your minifier:
+
+```js
+// terser / esbuild minify options
+{ compress: { drop_console: true } }
+// or target only this lib's entry point via pure_funcs / a wrapper
+```
+
+Or gate at the source by pointing `resolve`/`level` at your build mode.
 
 ## Customizing
 
@@ -128,17 +170,18 @@ localStorage.setItem("VERBOSE", "1");
 import { createLogger } from "@meyerzon/verbose-log";
 
 const log = createLogger({
-  envVar: "MY_VERBOSE",        // read a different env var (default "VERBOSE")
-  level: 1,                    // hard-code the threshold; skips env lookup
-  console: myConsole,          // proxy a custom console
-  resolve: () => getLevel(),   // custom resolver: number | null | undefined
-  levels: ["info", "debug"],   // named, ordered levels (sets max = length)
-  maxLevels: 3,                // numeric cap when `levels` is omitted (default 3)
+  envVar: "MY_VERBOSE",       // read a different env var (default "VERBOSE")
+  level: 1,                   // hard-code the threshold; skips env lookup
+  console: myConsole,         // proxy a custom console
+  resolve: () => getLevel(),  // custom resolver: number | undefined
+  levels: ["info", "debug"],  // named, ordered levels (sets max = length)
+  maxLevels: 3,               // numeric cap when `levels` is omitted (default 3)
 });
 ```
 
-- `level: null` forces base-only; `level` also accepts a level name.
-- `resolve` returning `undefined` falls through to the env / browser lookup.
+- `level` accepts a number, a level name, `0` for base-only, or `-1` to silence.
+- `resolve` returning `undefined` (or a non-finite number) falls through to the
+  env / browser lookup.
 - `levels` sets the cap to its length; otherwise `maxLevels` (default `3`) caps
   the numeric range.
 - The threshold is read **fresh on every call**, so changing `VERBOSE` (or the
@@ -151,17 +194,22 @@ const log = createLogger({
 
 For each call the threshold is resolved in this order, first hit wins:
 `level` option → `resolve()` (a non-finite return is skipped) → the env var (if
-actually set) → `globalThis[envVar]` → `localStorage`. A bundler-polyfilled
-`process.env` without the var does **not** shadow the browser sources, and a
-non-primitive global (object/function set by another script) is ignored rather
-than coerced.
+actually set) → `globalThis[envVar]` → `localStorage` → base only. A
+bundler-polyfilled `process.env` without the var does **not** shadow the browser
+sources, and a non-primitive global (object/function set by another script) is
+ignored rather than coerced.
+
+## Examples
+
+Runnable snippets live in [`examples/`](./examples): Node ESM, Node CJS, named
+levels in TypeScript, and a browser page.
 
 ## API
 
 - `log` — default logger reading `VERBOSE`.
 - `createLogger(options?)` — make a configured logger. Generic over the level
-  names, so `createLogger({ levels: ["a", "b"] })` types `.v()` to `"a" | "b" |
-  number`.
+  names, so `createLogger({ levels: ["a", "b"] })` types `.v()` to
+  `"a" | "b" | number`.
 - Types: `VerboseConsole<L>`, `VerboseLogOptions<L>`, `Threshold`.
 
 > Note: `v` is reserved on the proxy for level scoping; everything else passes
