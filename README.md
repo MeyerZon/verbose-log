@@ -215,6 +215,29 @@ levels in TypeScript, and a browser page.
 > Note: `v` is reserved on the proxy for level scoping; everything else passes
 > through to the underlying console.
 
+## Alternatives — when to use this, when not
+
+Logging tools sort along two independent axes: **how much** to log (verbosity
+depth) and **where** it came from (which subsystem). `verbose-log` does the
+first — one `VERBOSE` knob over a drop-in `console`, zero deps. It deliberately
+does **not** do namespaces, severity routing, structured output, or transports.
+
+| Library                                            | Focus                                                       | Reach for it when…                                                      |
+| -------------------------------------------------- | ----------------------------------------------------------- | ----------------------------------------------------------------------- |
+| **verbose-log**                                    | Verbosity **depth** via one `VERBOSE` env; drop-in console  | You want a single knob to dial how *much* console output an app/CLI emits, with no new API to learn |
+| [`debug`](https://github.com/debug-js/debug)       | **Namespaces** (`DEBUG=app:db,app:api`)                     | You want to switch *subsystems* on/off, not depth                       |
+| [`loglevel`](https://github.com/pimterry/loglevel) | **Severity** levels (trace→error), tiny, per-module loggers | You want standard severity methods in the browser, with named loggers   |
+| [`consola`](https://github.com/unjs/consola)       | Pretty reporters, tags, prompts (Node + browser)            | You want nicely formatted, colorful dev output                          |
+| [`pino`](https://github.com/pinojs/pino)           | Fast **structured** JSON logging                            | You need production logs / observability at high throughput             |
+| [`winston`](https://github.com/winstonjs/winston)  | Transports + formats (files, HTTP, services)                | You need to route logs to multiple destinations in production           |
+| `if (process.env.VERBOSE) console.log(...)`        | Nothing — hand-rolled                                       | …never again; that boilerplate is exactly what this replaces            |
+
+The axes compose: it's common to run **pino** (or plain `console`) for
+production and reach for **verbose-log** as the dev-time verbosity dial, or to
+pair it with **debug** when you also need per-subsystem switches. If you find
+yourself wanting namespaces, child loggers with bound context, or JSON output,
+you've outgrown this library — use one of the above.
+
 ## License
 
 MIT
