@@ -1,0 +1,68 @@
+{
+  "name": "@meyerzon/verbose-log",
+  "version": "0.1.0",
+  "description": "A console proxy gated by a VERBOSE threshold. Drop-in console for Node and the browser with per-call verbosity levels.",
+  "type": "module",
+  "main": "./dist/index.cjs",
+  "module": "./dist/index.mjs",
+  "types": "./dist/index.d.cts",
+  "exports": {
+    ".": {
+      "import": {
+        "types": "./dist/index.d.mts",
+        "default": "./dist/index.mjs"
+      },
+      "require": {
+        "types": "./dist/index.d.cts",
+        "default": "./dist/index.cjs"
+      }
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "sideEffects": false,
+  "scripts": {
+    "build": "tsdown",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "test:coverage": "vitest run --coverage",
+    "typecheck": "tsc --noEmit",
+    "prepublishOnly": "npm run build"
+  },
+  "keywords": [
+    "console",
+    "logger",
+    "logging",
+    "verbose",
+    "debug",
+    "proxy",
+    "log-level",
+    "typescript",
+    "browser",
+    "node"
+  ],
+  "author": "MeyerZon",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/MeyerZon/verbose-log.git"
+  },
+  "bugs": {
+    "url": "https://github.com/MeyerZon/verbose-log/issues"
+  },
+  "homepage": "https://github.com/MeyerZon/verbose-log#readme",
+  "engines": {
+    "node": ">=20"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "devDependencies": {
+    "@types/node": "24.13.1",
+    "@vitest/coverage-v8": "4.1.8",
+    "tsdown": "0.22.2",
+    "typescript": "6.0.3",
+    "vitest": "4.1.8"
+  }
+}
