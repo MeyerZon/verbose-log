@@ -138,7 +138,19 @@ const log = createLogger({
 - `levels` sets the cap to its length; otherwise `maxLevels` (default `3`) caps
   the numeric range.
 - The threshold is read **fresh on every call**, so changing `VERBOSE` (or the
-  global var) at runtime takes effect immediately.
+  global var) at runtime takes effect immediately. Caveat: if you toggle it
+  *between* the halves of a paired op (`group`/`groupEnd`, `time`/`timeEnd`,
+  `count`/`countReset`) one half may be suppressed and the other not — toggle
+  between logical sections, not inside a pair.
+
+### Resolution order
+
+For each call the threshold is resolved in this order, first hit wins:
+`level` option → `resolve()` (a non-finite return is skipped) → the env var (if
+actually set) → `globalThis[envVar]` → `localStorage`. A bundler-polyfilled
+`process.env` without the var does **not** shadow the browser sources, and a
+non-primitive global (object/function set by another script) is ignored rather
+than coerced.
 
 ## API
 

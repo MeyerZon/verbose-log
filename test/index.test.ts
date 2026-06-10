@@ -290,6 +290,41 @@ describe("options", () => {
     expect(first()).toEqual(["x"]);
   });
 
+  it("resolve() returning NaN falls through to env (does not mute)", () => {
+    process.env.VERBOSE = "0";
+    const { c, first } = capture();
+    const v = createLogger({ console: c, resolve: () => Number("nope") }); // NaN
+    v.info("a");
+    v.v(2).debug("b");
+    expect(first()).toEqual(["a", "b"]); // env VERBOSE=0 wins, nothing muted
+  });
+
+  it("resolve() returning Infinity falls through to env", () => {
+    process.env.VERBOSE = "1";
+    const { c, first } = capture();
+    const v = createLogger({ console: c, resolve: () => Infinity });
+    v.info("a");
+    v.v(1).info("b");
+    expect(first()).toEqual(["b"]);
+  });
+
+  it("level: NaN -> base only (lenient)", () => {
+    const { c, first } = capture();
+    const v = createLogger({ console: c, level: Number.NaN });
+    v.log("base");
+    v.v(1).log("hi");
+    expect(first()).toEqual(["base"]);
+  });
+
+  it("fractional VERBOSE is floored (strict/lenient agree on rank 1)", () => {
+    process.env.VERBOSE = "1.5"; // floor -> 1
+    const { c, first } = capture();
+    const v = createLogger({ console: c });
+    v.v(1).log("keep"); // 1 >= 1
+    v.v(0).log("drop"); // 0 >= 1 false
+    expect(first()).toEqual(["keep"]);
+  });
+
   it("threshold is read fresh on each call", () => {
     const { c, first } = capture();
     const v = createLogger({ console: c });
@@ -385,6 +420,36 @@ describe("browser threshold (no process.env)", () => {
     v.v(1).info("b");
     expect(first()).toEqual(["a"]);
   });
+
+  it("non-primitive global VERBOSE is ignored (no enable-all)", () => {
+    browser((g) => {
+      g.VERBOSE = { nope: true }; // object collision from another script
+      delete g.localStorage;
+    });
+    const { c, first } = capture();
+    const v = createLogger({ console: c });
+    v.info("a");
+    v.v(1).info("b");
+    delete (globalThis as Record<string, unknown>).VERBOSE;
+    expect(first()).toEqual(["a"]); // ignored -> null -> base only
+  });
+
+  it("a bundler-polyfilled process.env does not shadow global VERBOSE", () => {
+    // Real env object present, but the var itself is unset.
+    vi.stubGlobal(
+      "process",
+      new Proxy(process, {
+        get: (t, p) => (p === "env" ? {} : Reflect.get(t, p, t)),
+      }),
+    );
+    (globalThis as Record<string, unknown>).VERBOSE = 1;
+    const { c, first } = capture();
+    const v = createLogger({ console: c });
+    v.info("a");
+    v.v(1).info("b");
+    delete (globalThis as Record<string, unknown>).VERBOSE;
+    expect(first()).toEqual(["b"]); // falls through to the global
+  });
 });
 
 describe("proxy behavior", () => {
@@ -415,6 +480,14 @@ describe("proxy behavior", () => {
     v.v(1).v(2).log("kept"); // final rank 2 >= 2
     v.v(2).v(0).log("dropped"); // final rank 0 < 2
     expect(first()).toEqual(["kept"]);
+  });
+
+  it("method identity is stable across accesses (wrappers cached)", () => {
+    const { c } = capture();
+    const v = createLogger({ console: c });
+    expect(v.log).toBe(v.log);
+    expect(v.warn).toBe(v.warn);
+    expect(v.v).toBe(v.v);
   });
 
   it("muted call returns undefined; live call returns underlying value", () => {
