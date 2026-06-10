@@ -1,5 +1,7 @@
 # @meyerzon/verbose-log
 
+[![CI](https://github.com/MeyerZon/verbose-log/actions/workflows/ci.yml/badge.svg)](https://github.com/MeyerZon/verbose-log/actions/workflows/ci.yml)
+
 A `console` proxy gated by a `VERBOSE` threshold. Use it exactly like the
 built-in `console`, but attach a verbosity level to any call and let the
 environment decide what actually prints. Works in Node and the browser.
