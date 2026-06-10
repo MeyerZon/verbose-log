@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="assets/logo.png" alt="verbose-log" width="640" />
+</p>
+
 # @meyerzon/verbose-log
 
 [![CI](https://github.com/MeyerZon/verbose-log/actions/workflows/ci.yml/badge.svg)](https://github.com/MeyerZon/verbose-log/actions/workflows/ci.yml)
