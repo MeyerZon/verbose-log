@@ -22,6 +22,19 @@ environment decide what actually prints.
 - **Devtools-friendly**: passing calls keep your original file/line.
 - **Typed named levels** with autocomplete and typo protection.
 
+## Why this exists
+
+I write tests for a living. Three times now I've dropped the same shape of code
+into a suite — a hand-rolled `if (process.env.VERBOSE) console.log(...)` gate so
+a failing case could be coaxed into explaining itself, then quietly torn back out
+before the commit. The third time, I stopped deleting it and packaged it instead.
+
+`verbose-log` is that gate, made permanent and worth keeping. Leave your
+breadcrumbs in the code where the bug actually lives. Keep the suite silent by
+default so CI stays readable. When something flakes, turn the knob — `VERBOSE=2` —
+and the same code starts talking. No new logging framework, no churn — just
+`console` with a threshold.
+
 ## Install
 
 ```sh
